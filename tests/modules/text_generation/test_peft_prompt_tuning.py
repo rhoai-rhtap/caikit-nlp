@@ -17,12 +17,14 @@ import torch
 
 # First Party
 from caikit.interfaces.nlp.data_model import (
+    ClassificationTrainRecord,
     GeneratedTextResult,
     GeneratedTextStreamResult,
 )
 import caikit
 
 # Local
+from caikit_nlp.data_model import ExponentialDecayLengthPenalty
 from caikit_nlp.modules.text_generation import PeftPromptTuning
 from caikit_nlp.modules.text_generation.peft_prompt_tuning import TuningType
 from tests.fixtures import (
@@ -30,14 +32,16 @@ from tests.fixtures import (
     causal_lm_train_kwargs,
     seq2seq_lm_dummy_model,
     seq2seq_lm_train_kwargs,
+    set_cpu_device,
 )
 import caikit_nlp
 
 # Indexes into the peft config dictionary to get the actual prompt tuning config
 DEFAULT_ADAPTER = "default"
 
+
 ### Tests validating block interfaces and behavior
-def test_save_and_reload_with_base_model(causal_lm_dummy_model):
+def test_save_and_reload_with_base_model(causal_lm_dummy_model, set_cpu_device):
     """Ensure that we can save a model + its base to a tempdir and reload it."""
     with tempfile.TemporaryDirectory() as model_dir:
         causal_lm_dummy_model.save(model_dir, save_base_model=True)
@@ -72,6 +76,7 @@ def test_run_stream_out_model(causal_lm_dummy_model):
     pred_stream = causal_lm_dummy_model.run_stream_out("This text doesn't matter")
     assert isinstance(pred_stream, Iterable)
     for pred in pred_stream:
+        print(pred)
         assert isinstance(pred, GeneratedTextStreamResult)
 
 
@@ -79,7 +84,9 @@ def test_verbalizer_rendering(causal_lm_dummy_model):
     """Ensure that our model renders its verbalizer text correctly before calling tokenizer."""
     # Mock the tokenizer; we want to make sure its inputs are rendered properly
     causal_lm_dummy_model.tokenizer = mock.Mock(
-        side_effect=RuntimeError("Tokenizer is a mock!")
+        side_effect=RuntimeError("Tokenizer is a mock!"),
+        # Set eos token property to be attribute of tokenizer
+        eos_token="</s>",
     )
     input_text = "This text doesn't matter"
     causal_lm_dummy_model.verbalizer = " | {{input}} |"
@@ -109,7 +116,7 @@ def test_verbalizer_cannot_be_static(causal_lm_train_kwargs):
         )
 
 
-def test_train_model(causal_lm_train_kwargs):
+def test_train_model(causal_lm_train_kwargs, set_cpu_device):
     """Ensure that we can train a model on some toy data for 1+ steps & run inference."""
     patch_kwargs = {
         "num_epochs": 1,
@@ -138,17 +145,17 @@ def test_train_model(causal_lm_train_kwargs):
     assert isinstance(pred, GeneratedTextResult)
 
 
-def test_train_model_classification_record(causal_lm_train_kwargs):
+def test_train_model_classification_record(causal_lm_train_kwargs, set_cpu_device):
     """Ensure that we can train a model on some toy data for 1+ steps & run inference."""
     patch_kwargs = {
         "num_epochs": 1,
         "verbalizer": "Tweet text : {{input}} Label : ",
         "train_stream": caikit.core.data_model.DataStream.from_iterable(
             [
-                caikit_nlp.data_model.ClassificationTrainRecord(
+                ClassificationTrainRecord(
                     text="@foo what a cute dog!", labels=["no complaint"]
                 ),
-                caikit_nlp.data_model.ClassificationTrainRecord(
+                ClassificationTrainRecord(
                     text="@bar this is the worst idea ever.", labels=["complaint"]
                 ),
             ]
@@ -294,3 +301,60 @@ def test_model_can_only_have_one_or_two_transformer_modules(seq2seq_lm_dummy_mod
             TuningType.PROMPT_TUNING,
             seq2seq_lm_dummy_model.output_model_types,
         )
+
+
+######################## Test run with optional params #####################
+
+
+def test_run_repetition_penalty_0_works(causal_lm_dummy_model):
+    """Ensure repetition_penalty works with 0.0 as input"""
+    pred = causal_lm_dummy_model.run("This text doesn't matter", repetition_penalty=0.0)
+    assert isinstance(pred, GeneratedTextResult)
+
+
+def test_run_truncate_tokens_0(causal_lm_dummy_model):
+    """Ensure run function accepts 0 for truncation value
+    and successfully turns off truncation"""
+    pred = causal_lm_dummy_model.run(
+        "This text doesn't matter", truncate_input_tokens=0
+    )
+    assert isinstance(pred, GeneratedTextResult)
+
+
+def test_run_sampling_param_ignored_greedy_decoding(causal_lm_dummy_model):
+    """Ensure sampling parameter gets ignored when decoding method
+    is set to GREEDY
+    """
+    pred = causal_lm_dummy_model.run(
+        "This text doesn't matter",
+        decoding_method="GREEDY",
+        top_k=2,
+        top_p=0.23,
+        typical_p=0.23,
+        temperature=0.77,
+    )
+    assert isinstance(pred, GeneratedTextResult)
+
+
+def test_run_with_custom_stop_criteria(causal_lm_dummy_model):
+    """Ensure custom stop sequences works with run"""
+    pred = causal_lm_dummy_model.run(
+        "This text doesn't matter",
+        decoding_method="GREEDY",
+        stop_sequences=["Foo", "bar"],
+    )
+    assert isinstance(pred, GeneratedTextResult)
+
+
+def test_run_exponential_decay_len_penatly_object(causal_lm_dummy_model):
+    """Ensure exponential decay len penalty works with the data model
+    object
+    """
+    penalty = ExponentialDecayLengthPenalty(1, 0.2)
+    pred = causal_lm_dummy_model.run(
+        "This text doesn't matter",
+        decoding_method="GREEDY",
+        stop_sequences=["Foo", "bar"],
+        exponential_decay_length_penalty=penalty,
+    )
+    assert isinstance(pred, GeneratedTextResult)

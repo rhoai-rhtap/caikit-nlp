@@ -11,17 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+"""
+This sets up global test configs when pytest starts
+"""
+
+# Standard
+import os
 
 # First Party
-from caikit.core import TaskBase, task
+import alog
 
-# Local
-from ...data_model import TokenizationResult
-
-
-@task(
-    required_parameters={"text": str},
-    output_type=TokenizationResult,
+# Configure logging from the environment
+alog.configure(
+    default_level=os.environ.get("LOG_LEVEL", "off"),
+    filters=os.environ.get("LOG_FILTERS", "urllib3:off"),
+    thread_id=os.environ.get("LOG_THREAD_ID", "") == "true",
 )
-class TokenizationTask(TaskBase):
-    pass

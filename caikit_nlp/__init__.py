@@ -24,7 +24,7 @@ import caikit
 
 # Local
 # Import subpackages
-from . import config, data_model
+from . import config, data_model, model_management
 from .config import *
 from .data_model import *
 from .modules import *

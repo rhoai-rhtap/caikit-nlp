@@ -38,7 +38,6 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     DataCollatorForLanguageModeling,
-    TextStreamer,
     default_data_collator,
 )
 from transformers.models.auto.tokenization_auto import AutoTokenizer
@@ -49,8 +48,9 @@ import torch
 from caikit import get_config
 from caikit.core.data_model import DataStream
 from caikit.core.modules import ModuleBase, ModuleConfig, ModuleSaver, module
-from caikit.core.toolkit import error_handler, wip_decorator
+from caikit.core.toolkit import error_handler
 from caikit.interfaces.nlp.data_model import (
+    ClassificationTrainRecord,
     GeneratedTextResult,
     GeneratedTextStreamResult,
 )
@@ -59,7 +59,7 @@ import alog
 
 # Local
 from ...data_model import (
-    ClassificationTrainRecord,
+    ExponentialDecayLengthPenalty,
     GenerationTrainRecord,
     PromptOutputModelType,
     TuningConfig,
@@ -72,6 +72,11 @@ from ...resources.pretrained_model import (
 from ...toolkit.data_stream_wrapper import SimpleIterableStreamWrapper
 from ...toolkit.data_type_utils import get_torch_dtype, str_to_torch_dtype
 from ...toolkit.task_specific_utils import convert_to_generation_record
+from ...toolkit.text_generation.model_run_utils import (
+    GENERATE_FUNCTION_ARGS,
+    generate_text_func,
+    generate_text_func_stream,
+)
 from ...toolkit.verbalizer_utils import is_valid_verbalizer, render_verbalizer
 
 log = alog.use_channel("PEFT_PROMPT")
@@ -96,13 +101,6 @@ class TuningType(str, Enum):
     # P_TUNING = "P_TUNING"
     # PREFIX_TUNING = "PREFIX_TUNING"
     # LORA = "LORA"
-
-
-class Streamer(TextStreamer):
-    # The default TextStreamer currently prints to stdout
-    # so we override that here
-    def on_finalized_text(self, text: str, stream_end: bool = False):
-        pass
 
 
 # TODO: try to refactor this into a smaller module
@@ -158,6 +156,7 @@ class PeftPromptTuning(ModuleBase):
         self.tuning_type = tuning_type
         self.output_model_types = output_model_types
 
+    # pylint: disable=duplicate-code
     def __del__(self):
         del self.model
         del self.tokenizer
@@ -173,54 +172,81 @@ class PeftPromptTuning(ModuleBase):
     def run(
         self,
         text: str,
-        device: Optional[Union[str, int]] = _DETECT_DEVICE,
+        max_new_tokens: Optional[int] = 20,
+        min_new_tokens: Optional[int] = 0,
+        truncate_input_tokens: Optional[int] = 0,
+        decoding_method: Optional[str] = "GREEDY",
+        top_k: Optional[int] = 0,
+        top_p: Optional[float] = 1.0,
+        typical_p: Optional[float] = 1.0,
+        temperature: Optional[float] = 1.0,
+        seed: Optional[int] = None,
+        repetition_penalty: Optional[float] = 1.0,
+        max_time: Optional[float] = None,
+        exponential_decay_length_penalty: Optional[
+            Union[Tuple[int, float], ExponentialDecayLengthPenalty]
+        ] = None,
+        stop_sequences: Optional[str] = None,
+    ) -> GeneratedTextResult:
+        """
+            Run the full text generation model.
+            Args:
+                {}
+            Returns:
+                GeneratedTextResult
+                    Generated text result produced by PEFT / Transformers.
+        """.format(
+            GENERATE_FUNCTION_ARGS
+        )
+
+        verbalized_text = render_verbalizer(self.verbalizer, {"input": text})
+
+        return generate_text_func(
+            self.model,
+            self.tokenizer,
+            self.PRODUCER_ID,
+            self.tokenizer.eos_token,
+            verbalized_text,
+            max_new_tokens=max_new_tokens,
+            min_new_tokens=min_new_tokens,
+            truncate_input_tokens=truncate_input_tokens,
+            decoding_method=decoding_method,
+            top_k=top_k,
+            top_p=top_p,
+            typical_p=typical_p,
+            temperature=temperature,
+            seed=seed,
+            repetition_penalty=repetition_penalty,
+            max_time=max_time,
+            exponential_decay_length_penalty=exponential_decay_length_penalty,
+            stop_sequences=stop_sequences,
+        )
+
+    # NOTE: We need to disable wip decorator here otherwise we get issues in
+    # proto generation for streaming. We are keeping it commented out for now,
+    # to essentially document that this streaming function is WIP.
+    # @wip_decorator.work_in_progress(
+    #     category=wip_decorator.WipCategory.WIP, action=wip_decorator.Action.WARNING
+    # )
+    @TextGenerationTask.taskmethod(output_streaming=True)
+    def run_stream_out(
+        self,
+        text: str,
         max_new_tokens=20,
         min_new_tokens=0,
-    ) -> GeneratedTextResult:
-        """Run the full text generation model.
-
-        Args:
-            text: str
-                Input string to be used to the generation model.
-            device: Optional[Union[str, int]]
-                Device on which we should run inference; by default, we use the detected device.
-            max_new_tokens: int
-                The maximum numbers of tokens to generate.
-                Default: 20
-            min_new_tokens: int
-                The minimum numbers of tokens to generate.
-                Default: 0 - means no minimum
-
-        Returns:
-            GeneratedTextResult
-                Generated text result produced by PEFT / Transformers.
-        """
-        # Apply the verbalizer to our text string
-        verbalized_text = render_verbalizer(self.verbalizer, {"input": text})
-        # Apply the tokenizer to the sample text & move to correct device
-        tok_tensors = self.tokenizer(verbalized_text, return_tensors="pt")
-        device = PeftPromptTuning._get_device(device)
-        inputs = {k: v.to(device) for k, v in tok_tensors.items()}
-        with torch.no_grad():
-            # Run tokenized tensors through the rest of the PEFT model
-            outputs = self.model.generate(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_new_tokens=max_new_tokens,
-                min_new_tokens=min_new_tokens,
-                eos_token_id=self.eos_token_id,
-            )
-            gen_text = self.tokenizer.batch_decode(
-                outputs.detach().cpu().numpy(), skip_special_tokens=True
-            )
-        return GeneratedTextResult(generated_text=gen_text[0])
-
-    @TextGenerationTask.taskmethod(output_streaming=True)
-    @wip_decorator.work_in_progress(
-        category=wip_decorator.WipCategory.WIP, action=wip_decorator.Action.WARNING
-    )
-    def run_stream_out(
-        self, text: str, max_new_tokens=20, min_new_tokens=0
+        truncate_input_tokens: Optional[int] = 0,
+        decoding_method: Optional[str] = "GREEDY",
+        top_k: Optional[int] = 0,
+        top_p: Optional[float] = 0.0,
+        typical_p: Optional[float] = 0.0,
+        temperature: Optional[float] = 1.0,
+        seed: Optional[int] = None,
+        repetition_penalty: Optional[float] = 0.0,
+        max_time: Optional[float] = None,
+        exponential_decay_length_penalty: Optional[
+            Union[Tuple[int, float], ExponentialDecayLengthPenalty]
+        ] = None,
+        stop_sequences: Optional[str] = None,
     ) -> Iterable[GeneratedTextStreamResult]:
         """Run the text generation model with output streaming
 
@@ -230,40 +256,37 @@ class PeftPromptTuning(ModuleBase):
         Ref. https://huggingface.co/docs/transformers/v4.30.0/generation_strategies#streaming
 
         Args:
-            text: str
-                Input string to be used to the generation model.
-            max_new_tokens: int
-                The maximum numbers of tokens to generate.
-                Default: 20
-            min_new_tokens: int
-                The minimum numbers of tokens to generate.
-                Default: 0 - means no minimum
+            {}
 
         Returns:
             Iterable[GeneratedTextStreamResult]
-        """
+        """.format(
+            GENERATE_FUNCTION_ARGS
+        )
+
         # Apply the verbalizer to our text string
         verbalized_text = render_verbalizer(self.verbalizer, {"input": text})
-        # Apply the tokenizer to the sample text & move to correct device
-        tok_tensors = self.tokenizer(verbalized_text, return_tensors="pt")
-        inputs = {k: v.to(self.model.device) for k, v in tok_tensors.items()}
 
-        streamer = Streamer(self.tokenizer)
-        with torch.no_grad():
-            # Run tokenized tensors through the rest of the PEFT model
-            stream_outputs = self.model.generate(
-                input_ids=inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],
-                max_new_tokens=max_new_tokens,
-                min_new_tokens=min_new_tokens,
-                eos_token_id=self.eos_token_id,
-                streamer=streamer,
-            )
-            for stream_part in stream_outputs:
-                gen_text = self.tokenizer.batch_decode(
-                    stream_part.detach().cpu().numpy(), skip_special_tokens=True
-                )
-                yield GeneratedTextStreamResult(generated_text=gen_text)
+        return generate_text_func_stream(
+            self.model,
+            self.tokenizer,
+            self.PRODUCER_ID,
+            self.tokenizer.eos_token,
+            verbalized_text,
+            max_new_tokens=max_new_tokens,
+            min_new_tokens=min_new_tokens,
+            truncate_input_tokens=truncate_input_tokens,
+            decoding_method=decoding_method,
+            top_k=top_k,
+            top_p=top_p,
+            typical_p=typical_p,
+            temperature=temperature,
+            seed=seed,
+            repetition_penalty=repetition_penalty,
+            max_time=max_time,
+            exponential_decay_length_penalty=exponential_decay_length_penalty,
+            stop_sequences=stop_sequences,
+        )
 
     @classmethod
     def train(
@@ -353,7 +376,10 @@ class PeftPromptTuning(ModuleBase):
             init_method = tuning_config.prompt_tuning_init_method
 
             error.value_check(
-                "<NLP11848053E>", init_method in allowed_tuning_init_methods
+                "<NLP11848053E>",
+                init_method in allowed_tuning_init_methods,
+                f"Init method [{init_method}] not in allowed init methods: "
+                f"[{allowed_tuning_init_methods}]",
             )
 
             init_method = MultitaskPromptTuningInit(init_method)
@@ -437,7 +463,10 @@ class PeftPromptTuning(ModuleBase):
             )
 
         error.value_check(
-            "<NLP30542004E>", len(output_model_types) <= base_model.MAX_NUM_TRANSFORMERS
+            "<NLP30542004E>",
+            len(output_model_types) <= base_model.MAX_NUM_TRANSFORMERS,
+            f"Too many output model types. Got {len(output_model_types)}, "
+            f"maximum {base_model.MAX_NUM_TRANSFORMERS}",
         )
         # Ensure that our verbalizer is a string and will not render to a hardcoded string
         error.value_check(
@@ -455,6 +484,8 @@ class PeftPromptTuning(ModuleBase):
             error.value_check(
                 "<NLP65714994E>",
                 tuning_type in TuningType._member_names_,
+                f"Invalid tuning type [{tuning_type}]. Allowed types: "
+                f"[{TuningType._member_names_}]",
             )
             tuning_type = TuningType(tuning_type)
         error.type_check("<NLP65714993E>", TuningType, tuning_type=tuning_type)
@@ -616,7 +647,12 @@ class PeftPromptTuning(ModuleBase):
             module_saver.update_config(config_options)
 
     @classmethod
-    def load(cls, model_path: str, torch_dtype: str = None) -> "PeftPromptTuning":
+    def load(
+        cls,
+        model_path: str,
+        torch_dtype: str = None,
+        device: str = _DETECT_DEVICE,  # TODO: Union[int, str]
+    ) -> "PeftPromptTuning":
         """Load a PEFT prompt tuning model. This method will currently fail if the original
         model was not saved with the arg value save_base_model=True.
 
@@ -638,7 +674,7 @@ class PeftPromptTuning(ModuleBase):
             torch_dtype = str_to_torch_dtype(config.trained_torch_dtype)
         if config.has_base_model:
             # TODO: Implement logic for resource loading
-            device = cls._get_device(cls._DETECT_DEVICE)
+            device = cls._get_device(device)
             model_config = os.path.join(model_path, config.full_model_path)
             peft_config = PeftConfig.from_pretrained(model_config)
             if peft_config.task_type == "CAUSAL_LM":
@@ -715,7 +751,11 @@ class PeftPromptTuning(ModuleBase):
         # Our model should only have one or two transformer modules; PEFT config lets you
         # arbitrarily configure these, but the slicing assumptions for the prompt tuning
         # seem to assume this...
-        error.value_check("<NLP83837722E>", 1 <= num_transformer_submodules <= 2)
+        error.value_check(
+            "<NLP83837722E>",
+            1 <= num_transformer_submodules <= 2,
+            f"Only 1 or 2 transformer submodules allowed. {num_transformer_submodules} detected.",
+        )
         # Get the prompt vectors.
         if tuning_type == TuningType.PROMPT_TUNING:  # Should also be done for prefix
             # NOTE; If this is done for MPT, we get the SHARED prompt vector.
@@ -756,6 +796,9 @@ class PeftPromptTuning(ModuleBase):
         error.value_check(
             "<NLP83444722E>",
             prompt_vector.shape[0] == num_transformer_submodules * num_virtual_tokens,
+            f"Row mismatch: Expected num_transformer_submodules * num_virtual_tokens "
+            f"({num_transformer_submodules * num_virtual_tokens}) "
+            f"but got f{prompt_vector.shape[0]}",
         )
 
         # Otherwise it depends on the number of transformer modules. See seq2seq forward()
@@ -1017,7 +1060,7 @@ class PeftPromptTuning(ModuleBase):
             tokenize_function,
             requires_unwrapping,
         ) = base_model.build_task_tokenize_function(
-            tokenizer, max_source_length, max_target_length, verbalizer
+            tokenizer, max_source_length, max_target_length, verbalizer, task_ids=0
         )
         mapped_stream = train_stream.map(tokenize_function)
         if requires_unwrapping:
@@ -1077,8 +1120,11 @@ class PeftPromptTuning(ModuleBase):
             num_warmup_steps=0,
             num_training_steps=(len(train_dataloader) * num_epochs),
         )
-        # Configure accelerator for gradient accumulation
-        accelerator = Accelerator(gradient_accumulation_steps=accumulate_steps)
+
+        accelerator = Accelerator(
+            gradient_accumulation_steps=accumulate_steps, device_placement=True
+        )
+
         for epoch in range(num_epochs):
             model.train()
             total_loss = 0
