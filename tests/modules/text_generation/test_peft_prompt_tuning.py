@@ -65,6 +65,18 @@ def test_save_and_reload_without_base_model(causal_lm_dummy_model):
             caikit_nlp.load(model_dir)
 
 
+def test_save_log_loss_file(causal_lm_dummy_model):
+    """Ensure saving a model saves the log loss file"""
+    with tempfile.TemporaryDirectory() as model_dir:
+        causal_lm_dummy_model.save(model_dir, save_base_model=False)
+        assert os.path.isfile(
+            os.path.join(
+                model_dir,
+                caikit_nlp.modules.text_generation.peft_prompt_tuning.TRAINING_LOSS_LOG_FILENAME,
+            )
+        )
+
+
 def test_run_model(causal_lm_dummy_model):
     """Ensure that we can run a model and get the right type out."""
     pred = causal_lm_dummy_model.run("This text doesn't matter")
@@ -140,6 +152,35 @@ def test_train_model(causal_lm_train_kwargs, set_cpu_device):
     )
     # Test fallback to float32 behavior if this machine doesn't support bfloat16
     assert model.model.dtype is torch.float32
+    # Ensure that we can get something out of it
+    pred = model.run("@bar what a cute cat!")
+    assert isinstance(pred, GeneratedTextResult)
+
+
+def test_gen_trained_mpt(causal_lm_train_kwargs, set_cpu_device):
+    """Ensure that we are able to do generation on causal-lm model trained
+    using MPT."""
+    patch_kwargs = {
+        "num_epochs": 1,
+        "verbalizer": "Tweet text : {{input}} Label : ",
+        "train_stream": caikit.core.data_model.DataStream.from_iterable(
+            [
+                caikit_nlp.data_model.GenerationTrainRecord(
+                    input="@foo what a cute dog!", output="no complaint"
+                ),
+                caikit_nlp.data_model.GenerationTrainRecord(
+                    input="@bar this is the worst idea ever.", output="complaint"
+                ),
+            ]
+        ),
+        "torch_dtype": torch.float32,
+        "tuning_type": "MULTITASK_PROMPT_TUNING",
+        "device": "cpu",
+    }
+    causal_lm_train_kwargs.update(patch_kwargs)
+    model = caikit_nlp.modules.text_generation.PeftPromptTuning.train(
+        **causal_lm_train_kwargs
+    )
     # Ensure that we can get something out of it
     pred = model.run("@bar what a cute cat!")
     assert isinstance(pred, GeneratedTextResult)

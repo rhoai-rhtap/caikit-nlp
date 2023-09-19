@@ -15,10 +15,12 @@
 """Utility functions used for executing run function for text_generation"""
 
 # Standard
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 # Third Party
+from peft.peft_model import PeftModel
 from transformers import StoppingCriteria, TextStreamer
+import numpy as np
 import torch
 
 # First Party
@@ -79,7 +81,7 @@ GENERATE_FUNCTION_ARGS = """
         The value used to modulate the next token probabilities.
         Only applicable when decoding_method is SAMPLING.
         Default: 1.0 - means disabled - equivalent to 1.0
-    seed: int
+    seed: numpy.uint64
         Random seed to control sampling. Only applicable when decoding_method
         is SAMPLING. Default: None
     repetition_penalty: float
@@ -96,7 +98,7 @@ GENERATE_FUNCTION_ARGS = """
         consist of: (start_index, decay_factor) where start_index
         indicates where penalty starts and decay_factor represents the factor
         of exponential decay
-    stop_sequences: List[str]:
+    stop_sequences: List[str]
         List of strings to be used as stopping criteria
 """
 
@@ -141,13 +143,13 @@ def generate_text_func(
     top_p: Optional[float] = 1.0,
     typical_p: Optional[float] = 1.0,
     temperature: Optional[float] = 1.0,
-    seed: Optional[int] = None,
+    seed: Optional[np.uint64] = None,
     repetition_penalty: Optional[float] = 1.0,
     max_time: Optional[float] = None,
     exponential_decay_length_penalty: Optional[
         Union[Tuple[int, float], ExponentialDecayLengthPenalty]
     ] = None,
-    stop_sequences: Optional[str] = None,
+    stop_sequences: Optional[List[str]] = None,
     **kwargs,
 ):
     """
@@ -167,7 +169,7 @@ def generate_text_func(
         GENERATE_FUNCTION_ARGS
     )
 
-    error.type_check("<NLP85452187E>", str, eos_token=eos_token)
+    error.type_check("<NLP85452187E>", str, allow_none=True, eos_token=eos_token)
     error.type_check("<NLP65883534E>", str, text=text)
 
     error.type_check(
@@ -205,6 +207,17 @@ def generate_text_func(
         exponential_decay_length_penalty,
         stop_sequences,
     )
+
+    if "attention_mask" in inputs:
+        gen_optional_params["attention_mask"] = inputs["attention_mask"]
+
+    # NOTE: Below is required as `task_id` is a required field for generation
+    # with MPT in PEFT. We are manually setting task id to 0 vector since
+    # we do not allow setting task specific id anyways.
+    if isinstance(model, PeftModel):
+        gen_optional_params["task_ids"] = torch.zeros(
+            inputs["input_ids"].shape[0], dtype=inputs["input_ids"].dtype
+        ).to(model.device)
 
     with torch.no_grad():
         generate_ids = model.generate(
@@ -249,13 +262,13 @@ def generate_text_func_stream(
     top_p: Optional[float] = 0.0,
     typical_p: Optional[float] = 0.0,
     temperature: Optional[float] = 1.0,
-    seed: Optional[int] = None,
+    seed: Optional[np.uint64] = None,
     repetition_penalty: Optional[float] = 0.0,
     max_time: Optional[float] = None,
     exponential_decay_length_penalty: Optional[
         Union[Tuple[int, float], ExponentialDecayLengthPenalty]
     ] = None,
-    stop_sequences: Optional[str] = None,
+    stop_sequences: Optional[List[str]] = None,
     **kwargs,
 ):
     """
