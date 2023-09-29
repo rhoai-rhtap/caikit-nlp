@@ -21,9 +21,9 @@ import os
 import numpy as np
 
 # First Party
+from caikit.core.exceptions import error_handler
 from caikit.core.module_backends import BackendBase, backend_types
 from caikit.core.modules import ModuleBase, ModuleConfig, ModuleSaver, module
-from caikit.core.toolkit import error_handler
 from caikit.interfaces.nlp.data_model import (
     GeneratedTextResult,
     GeneratedTextStreamResult,
@@ -205,7 +205,6 @@ class TextGenerationTGIS(ModuleBase):
     def run(
         self,
         text: str,
-        preserve_input_text: bool = False,
         max_new_tokens: Optional[int] = 20,
         min_new_tokens: Optional[int] = 0,
         truncate_input_tokens: Optional[int] = 0,
@@ -221,6 +220,7 @@ class TextGenerationTGIS(ModuleBase):
             Union[Tuple[int, float], ExponentialDecayLengthPenalty]
         ] = None,
         stop_sequences: Optional[List[str]] = None,
+        preserve_input_text: bool = False,
     ) -> GeneratedTextResult:
         """Run inference against the model running in TGIS.
 
@@ -256,7 +256,6 @@ class TextGenerationTGIS(ModuleBase):
     def run_stream_out(
         self,
         text: str,
-        preserve_input_text: bool = False,
         max_new_tokens: Optional[int] = 20,
         min_new_tokens: Optional[int] = 0,
         truncate_input_tokens: Optional[int] = 0,
@@ -272,6 +271,7 @@ class TextGenerationTGIS(ModuleBase):
             Union[Tuple[int, float], ExponentialDecayLengthPenalty]
         ] = None,
         stop_sequences: Optional[List[str]] = None,
+        preserve_input_text: bool = False,
     ) -> Iterable[GeneratedTextStreamResult]:
         """Run output stream inferencing for text generation module.
 
