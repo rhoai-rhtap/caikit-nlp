@@ -361,7 +361,7 @@ class TextGeneration(ModuleBase):
                 "weight_decay": 0.01,
                 "save_total_limit": 3,
                 "push_to_hub": False,
-                "no_cuda": not torch.cuda.is_available(),  # Default
+                "use_cpu": not torch.cuda.is_available(),  # Default
                 "remove_unused_columns": True,
                 "dataloader_pin_memory": False,
                 "gradient_accumulation_steps": accumulate_steps,
@@ -525,11 +525,11 @@ class TextGeneration(ModuleBase):
         min_new_tokens: Optional[int] = 0,
         truncate_input_tokens: Optional[int] = 0,
         decoding_method: Optional[str] = "GREEDY",
-        top_k: Optional[int] = 0,
-        top_p: Optional[float] = 0.0,
-        typical_p: Optional[float] = 0.0,
-        temperature: Optional[float] = 1.0,
-        repetition_penalty: Optional[float] = 0.0,
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        typical_p: Optional[float] = None,
+        temperature: Optional[float] = None,
+        repetition_penalty: Optional[float] = None,
         max_time: Optional[float] = None,
         **kwargs,
     ) -> GeneratedTextResult:
@@ -593,7 +593,7 @@ class TextGeneration(ModuleBase):
         mapped_dataset = dataset.map(
             base_model.tokenize_function,
             fn_kwargs=fn_kwargs,
-            batched=base_model.REQUIRES_TOKEN_UNWRAPPING,
+            batched=False,
             # Drop the input / output columns; we need to do this for dimensions to play
             # happily when operating on batched inputs for causal language modeling.
             remove_columns=["input", "output"],
