@@ -11,8 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""This file is for helper functions related to TGIS.
-"""
+"""This file is for helper functions related to TGIS."""
+
 # Standard
 from typing import Iterable
 
@@ -33,6 +33,7 @@ from caikit.interfaces.nlp.data_model import (
     TokenizationResults,
     TokenStreamDetails,
 )
+from caikit_tgis_backend import TGISBackend
 from caikit_tgis_backend.protobufs import generation_pb2
 import alog
 
@@ -83,6 +84,11 @@ GRPC_TO_CAIKIT_CORE_STATUS = {
     grpc.StatusCode.DATA_LOSS: CaikitCoreStatusCode.CONNECTION_ERROR,
     grpc.StatusCode.UNAUTHENTICATED: CaikitCoreStatusCode.UNAUTHORIZED,
 }
+
+# HTTP Header / gRPC Metadata key used to identify a route override
+# (forwarded for API compatibility)
+ROUTE_INFO_HEADER_KEY = TGISBackend.ROUTE_INFO_HEADER_KEY
+get_route_info = TGISBackend.get_route_info
 
 
 def raise_caikit_core_exception(rpc_error: grpc.RpcError):
@@ -328,6 +334,21 @@ class TGISGenerationClient:
         self.prefix_id = prefix_id
 
         self.tgis_req_timeout = get_config().tgis_request_timeout
+
+        if (
+            not self.tgis_req_timeout
+            or not isinstance(self.tgis_req_timeout, int)
+            or self.tgis_req_timeout <= 0
+        ):
+            log.debug("<RUN57106697I>", "TGIS timeout not set")
+            self.tgis_req_timeout = None
+
+        else:
+            log.debug(
+                "<RUN57106696T>",
+                "Setting TGIS timeout value to  %d",
+                self.tgis_req_timeout,
+            )
 
     def unary_generate(
         self,
