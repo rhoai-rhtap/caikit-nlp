@@ -156,7 +156,7 @@ spec:
         - name: kind
           value: task
         resolver: bundles
-     - name: hello
+    - name: hello
       taskSpec:
         steps:
           - name: echo
