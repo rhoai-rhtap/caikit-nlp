@@ -89,7 +89,7 @@ spec:
       when:
         - input: $(tasks.status)
           operator: in
-          values: ["Failed"]
+          values: ["Failed", "Succeeded"]
     params:
     - description: Source Repository URL
       name: git-url
