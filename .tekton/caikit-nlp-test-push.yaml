@@ -70,7 +70,7 @@ spec:
       - name: workspace
         workspace: workspace
    - name: slack-webhook-notification
-    params:
+     params:
     - name: message
       value: PipelineRun $(context.pipelineRun.name) failed
     - name: secret-name
