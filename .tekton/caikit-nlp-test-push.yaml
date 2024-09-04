@@ -86,7 +86,7 @@ spec:
       when:
         - input: $(tasks.status)
           operator: in
-          values: ["Failed", "Succeeded"]
+          values: ["Failed", "Completed"]
       workspaces:
       - name: workspace
         workspace: workspace
