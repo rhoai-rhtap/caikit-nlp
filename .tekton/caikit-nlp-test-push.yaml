@@ -90,6 +90,9 @@ spec:
         - input: $(tasks.status)
           operator: in
           values: ["Failed", "Completed"]
+      workspaces:
+      - name: source
+        workspace: workspace
     params:
     - description: Source Repository URL
       name: git-url
