@@ -69,6 +69,27 @@ spec:
       workspaces:
       - name: workspace
         workspace: workspace
+   - name: slack-webhook-notification
+    params:
+    - name: message
+      value: PipelineRun $(context.pipelineRun.name) failed
+    - name: secret-name
+      value: slack-notfication-secret  # name of secret in the your namespace which contains slack web-hook URL under key specified in 'key-name' parameter below
+    - name: key-name
+      value: slack-webhook
+    taskRef:
+      params:
+      - name: bundle
+        value: quay.io/konflux-ci/tekton-catalog/task-slack-webhook-notification:0.1
+      - name: name
+        value: slack-webhook-notification
+      - name: kind
+        value: Task
+      resolver: bundles
+    when:
+      - input: $(tasks.status)
+        operator: in
+        values: ["Failed", "Succeeded"]
     params:
     - description: Source Repository URL
       name: git-url
