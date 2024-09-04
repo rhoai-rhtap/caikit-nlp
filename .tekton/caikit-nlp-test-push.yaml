@@ -72,7 +72,7 @@ spec:
     - name: slack-webhook-notification
       params:
       - name: message
-        value: PipelineRun $(context.pipelineRun.name) failed
+        value: ":x: Tekton pipelineRun $(context.pipelineRun.name) failed"
       - name: secret-name
         value: slack-notfication-secret  # name of secret in the your namespace which contains slack web-hook URL under key specified in 'key-name' parameter below
       - name: key-name
@@ -87,6 +87,9 @@ spec:
           value: Task
         resolver: bundles
       when:
+        - input: $(params.slack-webhook-notification-team)
+          operator: notin
+          values: [""]
         - input: $(tasks.status)
           operator: in
           values: ["Failed", "Succeeded"]
